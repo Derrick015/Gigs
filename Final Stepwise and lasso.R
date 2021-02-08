@@ -1,121 +1,120 @@
 ##############################################################################
 # Installing and loading libraries
 ##############################################################################
+if (!require(tidyverse)) install.packages('tidyverse') # A package for missing data
+library(tidyverse)
+
 if (!require(Amelia)) install.packages('Amelia') # A package for missing data
 library(Amelia)
 
 if (!require(mice)) install.packages('mice') # Multivariate imputation by chained equation
 library(mice)
 
-if (!require(fastDummies)) install.packages('fastDummies') # Creates dummy columns from columns that have categorical variables
-library(fastDummies)
-
 if (!require(glmnet)) install.packages('glmnet') # Lasso and Elastic-Net Regularized Generalized Linear Models
 library(glmnet)
 
 ##############################################################################
-# Data Importation and Preprocessing
+# Data Importation and Pre-processing
 ##############################################################################
 
-# Data Importation
-train_set <- read.csv("./train.csv",stringsAsFactors = T)
-test_set <- read.csv("./test.csv",stringsAsFactors = T)
+##Data Importation##
 
-# Bind test and train set to check for missing values
-train<-train_set[-81] # Remove the sales price from the trainset
-full_set<-bind_rows(train,test_set)
+train_set <- read.csv("./train.csv",stringsAsFactors = F)
+test_set <- read.csv("./test.csv",stringsAsFactors = F)
 
-# The train and test set has 13965 missing values in total
-sum(is.na(full_set))
+
+##Data Pre-processing##
+
+#Save ID so we can drop it from the merged data set
+train_id = train_set$Id
+test_id = test_set$Id
+
+# Place N/A into empty saleprice column in test set
+test_set$SalePrice = NA
+
+# Check for outliers by plotting saleprice vs GrLivArea
+qplot(train_set$GrLivArea, 
+      train_set$SalePrice,
+      main = "Outliers")
+
+# Remove the outliers
+train_set <- train_set[-which(train_set$GrLivArea > 4000 & 
+                                train_set$SalePrice < 3e+05), 
+]
+
+## Check again after removal.
+qplot(train_set$GrLivArea, train_set$SalePrice, main = "No Outliers")
+
+# Log Transformation of saleprice variable to the distribution of the dependent variable normal
+## histogram of SalePrice Variable is right skewed
+qplot(SalePrice, 
+      data = train_set, bins = 50, 
+      main = "Right skewed distribution")
+
+## Log transformation of salesprice
+train_set$SalePrice <- log(train_set$SalePrice + 1)
+
+## Normal distribution after transformation
+qplot(SalePrice, 
+      data = train_set, bins = 50, 
+      main = "Normal distribution achieved after log transformation")
+
+# Bind the train and test set
+full_set <- rbind(train_set,test_set)
+
+# Dropping Id as it is useless in prediction
+full_set <- full_set[,-1]
+
+
 # Percentage of missing data in each variables.
+# Note sales price will have about 50% N/A because we filled it
 colMeans(is.na(full_set))*100
-# Removing variables with more than 50% missing values
-full_set<-full_set[, which(colMeans(!is.na(full_set)) > 0.5)]
-# Plot of missing map
-missmap(full_set)
 
-# Imputation  for numeric, ordered and binary variables.
-set.seed(76)
-Impute <- mice(full_set[, c("BsmtQual", "BsmtCond", "BsmtExposure", "BsmtFinType1", "BsmtFinType2",
-                          "Electrical", "GarageType", "GarageFinish", "GarageQual", "GarageCond",
-                          "MasVnrType", "MSZoning", "Utilities", "Exterior1st", "Exterior2nd",
-                          "KitchenQual", "Functional", "SaleType", "LotFrontage", "GarageYrBlt",
-                          "MasVnrArea", "BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", 
-                          "BsmtFullBath", "BsmtHalfBath", "GarageCars", "GarageArea")],method="pmm")
+# Replacing some missing categorical variables with none
+for (i in c("Alley", "PoolQC", "MiscFeature", "Fence", "FireplaceQu", "GarageType", 
+            "GarageFinish", "GarageQual", "GarageCond", "BsmtQual", "BsmtCond", 
+            "BsmtExposure", "BsmtFinType1", "BsmtFinType2", "MasVnrType")) {
+  full_set[is.na(full_set[, i]), i] = "None"
+}
 
+# Group by neighborhood and fill N/A by the median
+# LotFrontage of all the neighborhood
+temp = aggregate(LotFrontage ~ Neighborhood, data = full_set, median)
+temp2 = c()
+for (h in full_set$Neighborhood[is.na(full_set$LotFrontage)]) {
+  temp2 = c(temp2, which(temp$Neighborhood == h))
+}
+full_set$LotFrontage[is.na(full_set$LotFrontage)] = temp[temp2, 2]
 
-Impute_set<-complete(Impute)
+## Replacing missing numerical data with 0
+for (col in c("GarageYrBlt", "GarageArea", "GarageCars", "BsmtFinSF1", 
+              "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "BsmtFullBath", "BsmtHalfBath", 
+              "MasVnrArea")) {
+  full_set[is.na(full_set[, col]), col] = 0
+}
 
-# Selecting numeric and factors for feature scaling
-full_set_factor <- select_if(full_set, is.factor)
-full_set_numeric<- select_if(full_set, is.numeric)
-full_set_numeric <- full_set_numeric[-1] # To remove id
-str(full_set)
-# Scaling numeric values
-Numeric_scale<-data.frame(scale(full_set_numeric))
+## Replace missing MSZoning values with'RL'
+full_set$MSZoning[is.na(full_set$MSZoning)] = "RL"
 
-# Generating dummy variables for factors
-dummy_factor <- dummy_cols(full_set_factor,
-                           remove_first_dummy = TRUE)
-dummy_factor<-select_if(dummy_factor, is.numeric)
+## Remove Utilities with 0 variance
+full_set = full_set[,-9]
 
-# Bind dataset without the standardized numerical variables.
-id<-full_set[1]
-full_set_non <- cbind(id, full_set_numeric,
-                      full_set_factor)
+## Replace missing Functional values with 'Typ'
+full_set$Functional[is.na(full_set$Functional)] = "Typ"
 
-#Bind dataset with standardized numerical values
-full_set_scale<- cbind(id, Numeric_scale,
-                       dummy_factor)
+## Replace missing Electrical values with 'SBrkr'
+full_set$Electrical[is.na(full_set$Electrical)] = "SBrkr"
 
+## Replace missing KitchenQual values by 'TA'
+full_set$KitchenQual[is.na(full_set$KitchenQual)] = "TA"
 
-saleprice <- train_set$SalePrice
-# Train set for non standardized numerical variables
-train_non <- full_set_non[1:1460,]
-train_non_set <- cbind(train_non, saleprice) 
-train_non_set <- train_non_set[-1]
+## Replace missing SaleType values by 'WD'
+full_set$SaleType[is.na(full_set$SaleType)] = "WD"
 
-# Test set for non standardized numerical variables
-test_non <- full_set_non[1461:2919,]
-test_non <-test_non[-1]
+## Replace missing Exterior1st and Exterior2nd values by 'VinylSd'
+full_set$Exterior1st[is.na(full_set$Exterior1st)] = "VinylSd"
+full_set$Exterior2nd[is.na(full_set$Exterior2nd)] = "VinylSd"
 
-
-saleprice_scale <-scale(saleprice)
-# Train set for standardized numerical variables
-train_scale <- full_set_scale[1:1460,]
-train_scale_set <- cbind(train_scale, saleprice_scale) 
-train_scale_set <- train_scale_set[-1]
-
-# Test set for standardized numerical variables
-test_scale_set <- full_set_scale[1461:2919,]
-test_scale_set <-test_scale_set[-1]
-
-
-
-##############################################################################
-#Modelling
-##############################################################################
-
-#Lasso regression model
-train_a <- train_scale_set$saleprice_scale
-train_b <- as.matrix(train_scale_set[-233])
-
-
-lambdas <- 10^seq(-4, 5, by=.1)
-set.seed(76)
-lasso <- cv.glmnet(train_a, train_b, 
-                   alpha = 1,# Setting alpha = 1 initials lasso regression
-                   lambda = lambdas)
-
-
-model_both <- step(lm(formula = saleprice ~ .,
-                      data = train_non_set), 
-                   direction = "both")
-
-# Finding the optimal lambda 
-best_lambda <- lasso$lambda.min 
-best_lambda
-
-
-dim(dummy_factor)
-
+## All NAs should be gone, except the test segment of SalePrice
+## variable, which we ourselves had initialized to NA earlier.
+colSums(is.na(full_set))
