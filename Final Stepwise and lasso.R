@@ -1,20 +1,26 @@
 ##############################################################################
 # Installing and loading libraries
 ##############################################################################
-if (!require(tidyverse)) install.packages('tidyverse') # A package for missing data
+if (!require(tidyverse)) install.packages('tidyverse') # Data manipulation, exploration and visualization
 library(tidyverse)
 
-if (!require(moments)) install.packages('moments') # A package for missing data
+if (!require(moments)) install.packages('moments') # A package for  Pearson's kurtosis, Geary's kurtosis and skewness; tests related to them
 library(moments)
 
-if (!require(caret)) install.packages('caret') # Multivariate imputation by chained equation
+if (!require(caret)) install.packages('caret')  # Classification and Regression Training
 library(caret)
 
-if (!require(MASS)) install.packages('MASS') # A package for missing data
+if (!require(MASS)) install.packages('MASS') # Support Functions and Datasets for Venables and Ripley's MASS. Functions and datasets to support Venables and Ripley
 library(MASS)
 
 if (!require(glmnet)) install.packages('glmnet') # Lasso and Elastic-Net Regularized Generalized Linear Models
 library(glmnet)
+
+if (!require(Metrics)) install.packages('Metrics') # A package for implementation of evaluation metrics in R that are commonly used in supervised machine learning
+library(Metrics)
+
+if (!require(car)) install.packages('car') # Companion to Applied Regression
+library(car)
 
 ##############################################################################
 # Data Importation and Pre-processing
@@ -24,7 +30,6 @@ library(glmnet)
 
 train_set <- read.csv("./train.csv",stringsAsFactors = F)
 test_set <- read.csv("./test.csv",stringsAsFactors = F)
-
 
 ##Data Pre-processing##
 
@@ -44,6 +49,7 @@ qplot(train_set$GrLivArea,
 train_set <- train_set[-which(train_set$GrLivArea > 4000 & 
                                 train_set$SalePrice < 3e+05), 
 ]
+
 
 ## Check again after removal.
 qplot(train_set$GrLivArea, train_set$SalePrice, main = "No Outliers")
@@ -128,7 +134,7 @@ full_set$OverallCond = as.character(full_set$OverallCond)
 full_set$YrSold = as.character(full_set$YrSold)
 full_set$MoSold = as.character(full_set$MoSold)
 
-# Label encoding some categorical variables that may contain information in thier ordering set
+# Label encoding some categorical variables that may contain information in their ordering set
 cols = c("FireplaceQu", "BsmtQual", "BsmtCond", "GarageQual", "GarageCond", 
          "ExterQual", "ExterCond", "HeatingQC", "PoolQC", "KitchenQual", "BsmtFinType1", 
          "BsmtFinType2", "Functional", "Fence", "BsmtExposure", "GarageFinish", 
@@ -209,3 +215,80 @@ for (x in names(skewed_feats)) {
   full_set[[x]] = predict(bc, full_set[[x]])
   # full_set[[x]] <- log(full_set[[x]] + 1)
 }
+
+# Reconstruct all data with the pre-processed data
+full_set <- cbind(full_set[numeric_feats], categorical_1_hot)
+dim(full_set)
+
+
+##############################################################################
+# Model building
+##############################################################################
+
+train<- full_set[1:1458, ]
+test<- full_set[1459:2917, ]
+
+#Data Partitioning Train: 70%, Validation: 30%
+set.seed(76)
+y <- train$SalePrice
+validation_index <- createDataPartition(y, times = 1, p = 0.3, list = FALSE)
+validation <- train[validation_index,]
+training <- train[-validation_index,]
+
+# 1. Lasso Regression
+set.seed(76)
+model_lasso = cv.glmnet(as.matrix(training[, -59]), 
+                     training[, 59])
+
+# Prediction with the validation set
+pred <- predict(model_lasso, 
+                newx = as.matrix(validation[, -59]),
+                s = "lambda.min")
+rmse(validation$SalePrice, pred)
+
+# Retraining on whole training set and Final Submission
+set.seed(123)
+cv_lasso = cv.glmnet(as.matrix(training[, -59]), training[, 59])
+
+## Predictions
+pred_lasso = data.frame(exp(predict(cv_lasso, 
+                               newx = as.matrix(test[, -59]), 
+                               s = "lambda.min")) - 1)
+
+# Saving lasso prediction results
+df<-data.frame(Id=test_id, SalePrice=preds$X1)
+write.csv(df, "results.csv", row.names = FALSE)
+
+
+# 2. Stepwise Regression
+model_step <- step(lm(formula = SalePrice ~ .,
+                      data = training), 
+                   direction = "forward")
+
+# Assumptions
+# A. The regression model is linear.....YES
+#Residuals vs Fitted. Horizontal line shows almost linear relationship
+plot(model_step, 1) 
+
+# B. The mean of residuals is zero.....YES 
+format(mean(model_step$residuals), 
+       scientific=F) # (mean of residuals is approximately zero, this assumption holds true)
+
+# C. Residuals are normally distributed.....NO
+plot(model_step, 2) #Normal QQ.... not normal pattern
+
+# D. Homoscedasticity of residuals.....NO
+plot(model_step, 3) # heteroscedascity
+
+# E No autocorrelation of residuals - YES
+acf(model_step$residuals) #the very first line (to the left) shows the correlation of residual with itself (Lag0), therefore, it will always be equal to 1. Correlation values drop below the dashed blue line from lag1 itself. So autocorrelation can’t be confirmed.
+# test for randomness, H0:is random, H1:is pattern
+lawstat::runs.test(model_step$residuals)
+# Durbin-Watson test, H0:no autocorrelation, H1: there is autocorrelation
+durbinWatsonTest(model_step)
+
+# Predictions
+pred_step <- predict(model_step, newdata = validation)
+rmse(validation$SalePrice, pred_step)
+
+
