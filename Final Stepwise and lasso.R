@@ -4,11 +4,14 @@
 if (!require(tidyverse)) install.packages('tidyverse') # A package for missing data
 library(tidyverse)
 
-if (!require(Amelia)) install.packages('Amelia') # A package for missing data
-library(Amelia)
+if (!require(moments)) install.packages('moments') # A package for missing data
+library(moments)
 
-if (!require(mice)) install.packages('mice') # Multivariate imputation by chained equation
-library(mice)
+if (!require(caret)) install.packages('caret') # Multivariate imputation by chained equation
+library(caret)
+
+if (!require(MASS)) install.packages('MASS') # A package for missing data
+library(MASS)
 
 if (!require(glmnet)) install.packages('glmnet') # Lasso and Elastic-Net Regularized Generalized Linear Models
 library(glmnet)
@@ -116,5 +119,93 @@ full_set$Exterior1st[is.na(full_set$Exterior1st)] = "VinylSd"
 full_set$Exterior2nd[is.na(full_set$Exterior2nd)] = "VinylSd"
 
 ## All NAs should be gone, except the test segment of SalePrice
-## variable, which we ourselves had initialized to NA earlier.
-colSums(is.na(full_set))
+# Check percentage of N/A in variables
+colMeans(is.na(full_set))*100
+
+# Transform some numerical variables that are categorical
+full_set$MSSubClass = as.character(full_set$MSSubClass)
+full_set$OverallCond = as.character(full_set$OverallCond)
+full_set$YrSold = as.character(full_set$YrSold)
+full_set$MoSold = as.character(full_set$MoSold)
+
+# Label encoding some categorical variables that may contain information in thier ordering set
+cols = c("FireplaceQu", "BsmtQual", "BsmtCond", "GarageQual", "GarageCond", 
+         "ExterQual", "ExterCond", "HeatingQC", "PoolQC", "KitchenQual", "BsmtFinType1", 
+         "BsmtFinType2", "Functional", "Fence", "BsmtExposure", "GarageFinish", 
+         "LandSlope", "LotShape", "PavedDrive", "Street", "Alley", "CentralAir", 
+         "MSSubClass", "OverallCond", "YrSold", "MoSold")
+
+FireplaceQu = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+BsmtQual = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+BsmtCond = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+GarageQual = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+GarageCond = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+ExterQual = c("Po", "Fa", "TA", "Gd", "Ex")
+ExterCond = c("Po", "Fa", "TA", "Gd", "Ex")
+HeatingQC = c("Po", "Fa", "TA", "Gd", "Ex")
+PoolQC = c("None", "Fa", "TA", "Gd", "Ex")
+KitchenQual = c("Po", "Fa", "TA", "Gd", "Ex")
+BsmtFinType1 = c("None", "Unf", "LwQ", "Rec", "BLQ", "ALQ", "GLQ")
+BsmtFinType2 = c("None", "Unf", "LwQ", "Rec", "BLQ", "ALQ", "GLQ")
+Functional = c("Sal", "Sev", "Maj2", "Maj1", "Mod", "Min2", "Min1", "Typ")
+Fence = c("None", "MnWw", "GdWo", "MnPrv", "GdPrv")
+BsmtExposure = c("None", "No", "Mn", "Av", "Gd")
+GarageFinish = c("None", "Unf", "RFn", "Fin")
+LandSlope = c("Sev", "Mod", "Gtl")
+LotShape = c("IR3", "IR2", "IR1", "Reg")
+PavedDrive = c("N", "P", "Y")
+Street = c("Pave", "Grvl")
+Alley = c("None", "Pave", "Grvl")
+MSSubClass = c("20", "30", "40", "45", "50", "60", "70", "75", "80", "85", 
+               "90", "120", "150", "160", "180", "190")
+OverallCond = NA
+MoSold = NA
+YrSold = NA
+CentralAir = NA
+levels = list(FireplaceQu, BsmtQual, BsmtCond, GarageQual, GarageCond, 
+              ExterQual, ExterCond, HeatingQC, PoolQC, KitchenQual, BsmtFinType1, 
+              BsmtFinType2, Functional, Fence, BsmtExposure, GarageFinish, LandSlope, 
+              LotShape, PavedDrive, Street, Alley, CentralAir, MSSubClass, OverallCond, 
+              YrSold, MoSold)
+i = 1
+for (c in cols) {
+  if (c == "CentralAir" | c == "OverallCond" | c == "YrSold" | c == "MoSold") {
+    full_set[, c] = as.numeric(factor(full_set[, c]))
+  } else full_set[, c] = as.numeric(factor(full_set[, c], levels = levels[[i]]))
+  i = i + 1
+}
+
+# Including a relevant feature
+full_set$TotalSF = full_set$TotalBsmtSF + full_set$X1stFlrSF + full_set$X2ndFlrSF
+
+# Dummy variables for categorical features
+
+# Get class for each feature
+feature_classes <- sapply(names(full_set), function(x) {
+  class(full_set[[x]])
+})
+numeric_feats <- names(feature_classes[feature_classes != "character"])
+
+# get names of categorical features
+categorical_feats <- names(feature_classes[feature_classes == "character"])
+
+# use caret dummyVars function for hot one encoding for categorical
+# features
+dummies <- dummyVars(~., full_set[categorical_feats])
+categorical_1_hot <- predict(dummies, full_set[categorical_feats])
+
+# Fixing skewed numerical varibles
+## Determine skew for each numerical feature
+skewed_feats <- sapply(numeric_feats, function(x) {
+  skewness(full_set[[x]], na.rm = TRUE)
+})
+
+## Keep only features that exceed a threshold (0.75) for skewness
+skewed_feats <- skewed_feats[abs(skewed_feats) > 0.75]
+
+## Transform skewed features with boxcox transformation
+for (x in names(skewed_feats)) {
+  bc = BoxCoxTrans(full_set[[x]], lambda = 0.15)
+  full_set[[x]] = predict(bc, full_set[[x]])
+  # full_set[[x]] <- log(full_set[[x]] + 1)
+}
