@@ -1,0 +1,623 @@
+---
+title: "Lasso and Stepwise Project"
+author: "Untitled"
+date: "08/02/2021"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    fig_height: 4.5
+    fig_width: 7
+    highlight: tango
+    number_sections: yes
+    theme: readable
+    toc: yes
+---
+
+
+#THEORETICAL BASES
+
+##Stepwise Regression
+
+A stepwise regression is an iterative construction of a regression model that involving the selection of relevant independent variables to be utilized in a final model. This method examines the statistical significance of each independent variable in a linear regression model. This form of regression is mostly used when there are numerous independent variables that produces insignificant outcomes because of the small sample size or high correlation between independent variables.
+
+Stepwise regression can be undertaken either by regressing each independent variable at a time and including it in the final regression model if it is statistically significant or selecting all the relevant independent variables and including them in the model, only to eliminate those that are not statistically significant. Alternatively an amalgamation of both can be applied. This creates three methods for the step wise regression:
+
+•	Forward selection: Each independent variable is tested and included in the model if it is statistically significant. This process is repeated till all significant variables are captured
+•	Backward elimination: Here we start with a group of independent variables, remove one at a time then test to see if the removed variable was statistically significant
+•	Bidirectional elimination: This combines both forward selection and backward elimination to determine which independent variable is included or excluded from the final model.
+
+## Lasso Regression
+
+“LASSO” denotes Least Absolute Shrinkage and Selection Operator. Lasso regression is a regularization technique that is used over linear regression for better predictions.  It does this through shrinkage. This is where data values are shrunk towards a central point like the mean. 
+
+With lasso regression a penalty term is introduced which penalizes the absolute size of the regression coefficients. By curtailing the sum of the absolute value of the estimates, some coefficients can become zero, thus removing them from the model. A bigger penalty will future cause more shrinkage towards zero. This is useful when you wish to select variables for a model and helps in situations where there are high levels of multicollinearity. The lasso regression can be represented by:
+
+Residual Sum of Squares + λ * (Sum of the absolute value of the magnitude of coefficients)
+
+•	Lambda (λ) demotes the amount of shrinkage
+
+•	When lambda is zero all variables are maintained and the estimate is equivalent to that of a linear regression.
+
+•	As lambda increases more coefficients will be set to zero and in effect eliminate the feature or variable. Theoretically when lambda is equal to infinity all the coefficients will be removed.
+
+•	As lambda increases bias increases
+
+
+```{r,echo = FALSE}
+(!require(tidyverse)) install.packages('tidyverse') # Data manipulation, exploration and visualization
+library(tidyverse)
+
+if (!require(moments)) install.packages('moments') # A package for  Pearson's kurtosis, Geary's kurtosis and skewness; tests related to them
+library(moments)
+
+if (!require(caret)) install.packages('caret')  # Classification and Regression Training
+library(caret)
+
+if (!require(MASS)) install.packages('MASS') # Support Functions and Datasets for Venables and Ripley's MASS. Functions and datasets to support Venables and Ripley
+library(MASS)
+
+if (!require(glmnet)) install.packages('glmnet') # Lasso and Elastic-Net Regularized Generalized Linear Models
+library(glmnet)
+
+if (!require(Metrics)) install.packages('Metrics') # A package for implementation of evaluation metrics in R that are commonly used in supervised machine learning
+library(Metrics)
+
+if (!require(car)) install.packages('car') # Companion to Applied Regression
+library(car)
+```
+
+
+# Data Presentation
+The a combination of the test and train set reveals the dataset has **2917** observations and **81** variables with a mixture of integer, character and numerical values.
+
+```{r,echo=FALSE}
+train_set <- read.csv("./train.csv",stringsAsFactors = F)
+test_set <- read.csv("./test.csv",stringsAsFactors = F)
+
+#Save ID so we can drop it from the merged data set
+train_id = train_set$Id
+test_id = test_set$Id
+
+# Place N/A into empty saleprice column in test set
+test_set$SalePrice = NA
+
+set<- rbind(train_set, test_set)
+str(set)
+```
+
+# Data Pre-processing 
+ First we will handle outliers. A scatterplot between Saleprice and GrLivArea variables shows some outliers which we have to get rid off.
+ 
+```{r,echo=FALSE}
+
+# Check for outliers by plotting saleprice vs GrLivArea
+qplot(train_set$GrLivArea, 
+      train_set$SalePrice,
+      main = "Outliers")
+
+# Remove the outliers
+train_set <- train_set[-which(train_set$GrLivArea > 4000 & 
+                                train_set$SalePrice < 3e+05), 
+]
+
+## Check again after removal.
+qplot(train_set$GrLivArea, train_set$SalePrice, main = "No Outliers")
+```
+
+Additionally the distribution of the dependent variable need to be normal so it would be logged. The dataset has a total of 1459 missing figure which will be filled through imputation. For a number of the categorical variables, NA values will be replaced with "None" since these variables represent the absence of Basements, Garages and others.For most of the numerical variables , N/A will be replaced with zero and finally for some categorical variables the NA values will be replaced with the most occuring value. We will also specify the order of the levels, while converting categories to integer ranks.Dummy categorical variables will then be encoded, with some skewed features being transformed.
+
+
+```{r_preprocessing,echo=FALSE}
+# Log Transformation of saleprice variable to the distribution of the dependent variable normal
+## histogram of SalePrice Variable is right skewed
+qplot(SalePrice, 
+      data = train_set, bins = 50, 
+      main = "Right skewed distribution")
+
+## Log transformation of salesprice
+train_set$SalePrice <- log(train_set$SalePrice + 1)
+
+## Normal distribution after transformation
+qplot(SalePrice, 
+      data = train_set, bins = 50, 
+      main = "Normal distribution achieved after log transformation")
+
+# Bind the train and test set
+full_set <- rbind(train_set,test_set)
+
+# Dropping Id as it is useless in prediction
+full_set <- full_set[,-1]
+
+
+# Percentage of missing data in each variables.
+# Note sales price will have about 50% N/A because we filled it
+colMeans(is.na(full_set))*100
+sum(is.na(full_set))
+
+# Replacing some missing categorical variables with none
+for (i in c("Alley", "PoolQC", "MiscFeature", "Fence", "FireplaceQu", "GarageType", 
+            "GarageFinish", "GarageQual", "GarageCond", "BsmtQual", "BsmtCond", 
+            "BsmtExposure", "BsmtFinType1", "BsmtFinType2", "MasVnrType")) {
+  full_set[is.na(full_set[, i]), i] = "None"
+}
+
+# Group by neighborhood and fill N/A by the median
+# LotFrontage of all the neighborhood
+temp = aggregate(LotFrontage ~ Neighborhood, data = full_set, median)
+temp2 = c()
+for (h in full_set$Neighborhood[is.na(full_set$LotFrontage)]) {
+  temp2 = c(temp2, which(temp$Neighborhood == h))
+}
+full_set$LotFrontage[is.na(full_set$LotFrontage)] = temp[temp2, 2]
+
+## Replacing missing numerical data with 0
+for (col in c("GarageYrBlt", "GarageArea", "GarageCars", "BsmtFinSF1", 
+              "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF", "BsmtFullBath", "BsmtHalfBath", 
+              "MasVnrArea")) {
+  full_set[is.na(full_set[, col]), col] = 0
+}
+
+## Replace missing MSZoning values with'RL'
+full_set$MSZoning[is.na(full_set$MSZoning)] = "RL"
+
+## Remove Utilities with 0 variance
+full_set = full_set[,-9]
+
+## Replace missing Functional values with 'Typ'
+full_set$Functional[is.na(full_set$Functional)] = "Typ"
+
+## Replace missing Electrical values with 'SBrkr'
+full_set$Electrical[is.na(full_set$Electrical)] = "SBrkr"
+
+## Replace missing KitchenQual values by 'TA'
+full_set$KitchenQual[is.na(full_set$KitchenQual)] = "TA"
+
+## Replace missing SaleType values by 'WD'
+full_set$SaleType[is.na(full_set$SaleType)] = "WD"
+
+## Replace missing Exterior1st and Exterior2nd values by 'VinylSd'
+full_set$Exterior1st[is.na(full_set$Exterior1st)] = "VinylSd"
+full_set$Exterior2nd[is.na(full_set$Exterior2nd)] = "VinylSd"
+
+## All NAs should be gone, except the test segment of SalePrice
+# Check percentage of N/A in variables
+colMeans(is.na(full_set))*100
+
+# Transform some numerical variables that are categorical
+full_set$MSSubClass = as.character(full_set$MSSubClass)
+full_set$OverallCond = as.character(full_set$OverallCond)
+full_set$YrSold = as.character(full_set$YrSold)
+full_set$MoSold = as.character(full_set$MoSold)
+
+# Label encoding some categorical variables that may contain information in their ordering set
+cols = c("FireplaceQu", "BsmtQual", "BsmtCond", "GarageQual", "GarageCond", 
+         "ExterQual", "ExterCond", "HeatingQC", "PoolQC", "KitchenQual", "BsmtFinType1", 
+         "BsmtFinType2", "Functional", "Fence", "BsmtExposure", "GarageFinish", 
+         "LandSlope", "LotShape", "PavedDrive", "Street", "Alley", "CentralAir", 
+         "MSSubClass", "OverallCond", "YrSold", "MoSold")
+
+FireplaceQu = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+BsmtQual = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+BsmtCond = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+GarageQual = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+GarageCond = c("None", "Po", "Fa", "TA", "Gd", "Ex")
+ExterQual = c("Po", "Fa", "TA", "Gd", "Ex")
+ExterCond = c("Po", "Fa", "TA", "Gd", "Ex")
+HeatingQC = c("Po", "Fa", "TA", "Gd", "Ex")
+PoolQC = c("None", "Fa", "TA", "Gd", "Ex")
+KitchenQual = c("Po", "Fa", "TA", "Gd", "Ex")
+BsmtFinType1 = c("None", "Unf", "LwQ", "Rec", "BLQ", "ALQ", "GLQ")
+BsmtFinType2 = c("None", "Unf", "LwQ", "Rec", "BLQ", "ALQ", "GLQ")
+Functional = c("Sal", "Sev", "Maj2", "Maj1", "Mod", "Min2", "Min1", "Typ")
+Fence = c("None", "MnWw", "GdWo", "MnPrv", "GdPrv")
+BsmtExposure = c("None", "No", "Mn", "Av", "Gd")
+GarageFinish = c("None", "Unf", "RFn", "Fin")
+LandSlope = c("Sev", "Mod", "Gtl")
+LotShape = c("IR3", "IR2", "IR1", "Reg")
+PavedDrive = c("N", "P", "Y")
+Street = c("Pave", "Grvl")
+Alley = c("None", "Pave", "Grvl")
+MSSubClass = c("20", "30", "40", "45", "50", "60", "70", "75", "80", "85", 
+               "90", "120", "150", "160", "180", "190")
+OverallCond = NA
+MoSold = NA
+YrSold = NA
+CentralAir = NA
+levels = list(FireplaceQu, BsmtQual, BsmtCond, GarageQual, GarageCond, 
+              ExterQual, ExterCond, HeatingQC, PoolQC, KitchenQual, BsmtFinType1, 
+              BsmtFinType2, Functional, Fence, BsmtExposure, GarageFinish, LandSlope, 
+              LotShape, PavedDrive, Street, Alley, CentralAir, MSSubClass, OverallCond, 
+              YrSold, MoSold)
+i = 1
+for (c in cols) {
+  if (c == "CentralAir" | c == "OverallCond" | c == "YrSold" | c == "MoSold") {
+    full_set[, c] = as.numeric(factor(full_set[, c]))
+  } else full_set[, c] = as.numeric(factor(full_set[, c], levels = levels[[i]]))
+  i = i + 1
+}
+
+# Including a relevant feature
+full_set$TotalSF = full_set$TotalBsmtSF + full_set$X1stFlrSF + full_set$X2ndFlrSF
+
+# Dummy variables for categorical features
+
+# Get class for each feature
+feature_classes <- sapply(names(full_set), function(x) {
+  class(full_set[[x]])
+})
+numeric_feats <- names(feature_classes[feature_classes != "character"])
+
+# get names of categorical features
+categorical_feats <- names(feature_classes[feature_classes == "character"])
+
+# use caret dummyVars function for hot one encoding for categorical
+# features
+dummies <- dummyVars(~., full_set[categorical_feats])
+categorical_1_hot <- predict(dummies, full_set[categorical_feats])
+
+# Fixing skewed numerical varibles
+## Determine skew for each numerical feature
+skewed_feats <- sapply(numeric_feats, function(x) {
+  skewness(full_set[[x]], na.rm = TRUE)
+})
+
+## Keep only features that exceed a threshold (0.75) for skewness
+skewed_feats <- skewed_feats[abs(skewed_feats) > 0.75]
+
+## Transform skewed features with boxcox transformation
+for (x in names(skewed_feats)) {
+  bc = BoxCoxTrans(full_set[[x]], lambda = 0.15)
+  full_set[[x]] = predict(bc, full_set[[x]])
+  # full_set[[x]] <- log(full_set[[x]] + 1)
+}
+
+# Reconstruct all data with the pre-processed data
+full_set <- cbind(full_set[numeric_feats], categorical_1_hot)
+```
+
+
+# Objective
+
+For this study our goal will be to utilize the Lasso and step-wise approach to make predictions in the test set, we will do this by partitioning the the train set into train and validation sets. The RMSE for both will be computed through cross validation. Finally predictions will be made with the actual test set and saved for submission.
+
+
+# Model building
+
+## 1. Lasso Regression
+
+
+**Removing outliers** - A scatterplot between SalePrice and GrLivArea shows a couple of outliers. Let us get rid of them.
+
+```{r}
+library(ggplot2)
+qplot(train$GrLivArea,train$SalePrice,main="With Outliers")
+train<-train[-which(train$GrLivArea>4000 & train$SalePrice<300000),]
+
+## Check again after removal.
+qplot(train$GrLivArea,train$SalePrice,main="Without Outliers")
+```
+
+**Log Transformation of SalePrice Variable** - In order to make the distribution of the target variable normal, we need to transform it by taking log.
+
+```{r}
+## Plot histogram of SalePrice Variable - Right skewed
+qplot(SalePrice,data=train,bins=50,main="Right skewed distribution")
+
+## Log transformation of the target variable
+train$SalePrice <- log(train$SalePrice + 1)
+
+## Normal distribution after transformation
+qplot(SalePrice,data=train,bins=50,main="Normal distribution after log transformation")
+```
+
+**Combine train and test datasets**.
+
+```{r}
+## Combine train and test
+combi=rbind(train,test)
+
+## Dropping Id as it is unnecessary for the prediction process.
+combi=combi[,-1]
+```
+
+# Data Processing and Analysis
+
+## Checking Missing data
+
+Let us check the number of rows of data missing for each variable out of 2917 rows.
+
+```{r}
+colSums(is.na(combi))
+```
+
+Clearly, there are a lot of missing values. PoolQC, MiscFeature, Alley and Fence have 90% of the data as NA. 
+
+## Imputing Missing data
+
+We will be handling each variable separately. 
+
+1. For most of the **categorical features**, NA values will be imputed as **'None'**, because referring to the **data_description.txt** file, **the NA of these variables represent values such as 'No Garage','No Basement', etc.**
+
+2. For most of the **numerical features**, NA values will be replaced by 0, for variables like GarageArea, GarageCars, etc.
+
+3. For some categorical features like Functional and Electrical, the NA values will be replaced by the most frequently occuring value for that variable.
+
+```{r}
+## For some variables, fill NA with "None" 
+for(x in c("Alley","PoolQC","MiscFeature","Fence","FireplaceQu","GarageType","GarageFinish","GarageQual",'GarageCond','BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2',"MasVnrType")){
+        combi[is.na(combi[,x]),x]="None"
+}
+
+#Group by neighborhood and fill in missing value by the median LotFrontage of all the neighborhood
+temp=aggregate(LotFrontage~Neighborhood,data=combi,median)
+temp2=c()
+for(str in combi$Neighborhood[is.na(combi$LotFrontage)]){temp2=c(temp2,which(temp$Neighborhood==str))}
+combi$LotFrontage[is.na(combi$LotFrontage)]=temp[temp2,2]
+
+## Replacing missing data with 0
+for(col in c('GarageYrBlt', 'GarageArea', 'GarageCars','BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF','TotalBsmtSF', 'BsmtFullBath', 'BsmtHalfBath',"MasVnrArea")){
+        combi[is.na(combi[,col]),col]=0
+}
+
+## Replace missing MSZoning values by "RL"
+combi$MSZoning[is.na(combi$MSZoning)]="RL"
+
+## Remove Utilities as it has zero variance
+combi=combi[,-9]
+
+## Replace missing Functional values with "Typ"
+combi$Functional[is.na(combi$Functional)]="Typ"
+
+## Replace missing Electrical values with "SBrkr"
+combi$Electrical[is.na(combi$Electrical)]="SBrkr"
+
+## Replace missing KitchenQual values by "TA"
+combi$KitchenQual[is.na(combi$KitchenQual)]="TA"
+
+## Replace missing SaleType values by "WD"
+combi$SaleType[is.na(combi$SaleType)]="WD"
+
+## Replace missing Exterior1st and Exterior2nd values by "VinylSd"
+combi$Exterior1st[is.na(combi$Exterior1st)]="VinylSd"
+combi$Exterior2nd[is.na(combi$Exterior2nd)]="VinylSd"
+
+## All NAs should be gone, except the test portion of SalePrice variable, which we ourselves had initialized to NA earlier.
+colSums(is.na(combi))
+```
+
+## Transforming some numerical variables that are really categorical
+
+```{r}
+combi$MSSubClass=as.character(combi$MSSubClass)
+combi$OverallCond=as.character(combi$OverallCond)
+combi$YrSold=as.character(combi$YrSold)
+combi$MoSold=as.character(combi$MoSold)
+```
+
+## Label Encoding some categorical variables that may contain information in their ordering set
+
+**We will also specify the order of the levels (mapping), while label encoding (converting categories to integer ranks - 1 to n) the categorical variables.**
+
+```{r}
+cols = c('FireplaceQu', 'BsmtQual', 'BsmtCond', 'GarageQual', 'GarageCond', 'ExterQual', 'ExterCond','HeatingQC', 'PoolQC', 'KitchenQual', 'BsmtFinType1', 'BsmtFinType2', 'Functional', 'Fence', 'BsmtExposure', 'GarageFinish', 'LandSlope','LotShape', 'PavedDrive', 'Street', 'Alley', 'CentralAir', 'MSSubClass', 'OverallCond', 'YrSold', 'MoSold')
+
+FireplaceQu=c('None','Po','Fa','TA','Gd','Ex')
+BsmtQual=c('None','Po','Fa','TA','Gd','Ex')
+BsmtCond=c('None','Po','Fa','TA','Gd','Ex')
+GarageQual=c('None','Po','Fa','TA','Gd','Ex')
+GarageCond=c('None','Po','Fa','TA','Gd','Ex')
+ExterQual=c('Po','Fa','TA','Gd','Ex')
+ExterCond=c('Po','Fa','TA','Gd','Ex')
+HeatingQC=c('Po','Fa','TA','Gd','Ex')
+PoolQC=c('None','Fa','TA','Gd','Ex')
+KitchenQual=c('Po','Fa','TA','Gd','Ex')
+BsmtFinType1=c('None','Unf','LwQ','Rec','BLQ','ALQ','GLQ')
+BsmtFinType2=c('None','Unf','LwQ','Rec','BLQ','ALQ','GLQ')
+Functional=c('Sal','Sev','Maj2','Maj1','Mod','Min2','Min1','Typ')
+Fence=c('None','MnWw','GdWo','MnPrv','GdPrv')
+BsmtExposure=c('None','No','Mn','Av','Gd')
+GarageFinish=c('None','Unf','RFn','Fin')
+LandSlope=c('Sev','Mod','Gtl')
+LotShape=c('IR3','IR2','IR1','Reg')
+PavedDrive=c('N','P','Y')
+Street=c('Pave','Grvl')
+Alley=c('None','Pave','Grvl')
+MSSubClass=c('20','30','40','45','50','60','70','75','80','85','90','120','150','160','180','190')
+OverallCond=NA
+MoSold=NA
+YrSold=NA
+CentralAir=NA
+levels=list(FireplaceQu, BsmtQual, BsmtCond, GarageQual, GarageCond, ExterQual, ExterCond,HeatingQC, PoolQC, KitchenQual, BsmtFinType1, BsmtFinType2, Functional, Fence, BsmtExposure, GarageFinish, LandSlope,LotShape, PavedDrive, Street, Alley, CentralAir, MSSubClass, OverallCond, YrSold, MoSold)
+i=1
+for (c in cols){
+        if(c=='CentralAir'|c=='OverallCond'|c=='YrSold'|c=='MoSold'){
+                combi[,c]=as.numeric(factor(combi[,c]))}
+        else
+                combi[,c]=as.numeric(factor(combi[,c],levels=levels[[i]]))
+i=i+1
+        }
+```
+
+## Adding an important feature - Total area of basement
+
+```{r}
+combi$TotalSF=combi$TotalBsmtSF+combi$X1stFlrSF+combi$X2ndFlrSF
+```
+
+## Getting dummy categorical features
+
+```{r}
+# first get data type for each feature
+feature_classes <- sapply(names(combi),function(x){class(combi[[x]])})
+numeric_feats <-names(feature_classes[feature_classes != "character"])
+
+# get names of categorical features
+categorical_feats <- names(feature_classes[feature_classes == "character"])
+
+# use caret dummyVars function for hot one encoding for categorical features
+library(caret)
+dummies <- dummyVars(~.,combi[categorical_feats])
+categorical_1_hot <- predict(dummies,combi[categorical_feats])
+```
+
+## Fixing Skewed features
+
+**We will transform the skewed features with BoxCox Transformation.**
+
+```{r}
+## Determine skew for each numeric feature
+library(moments)
+library(MASS)
+skewed_feats <- sapply(numeric_feats,function(x){skewness(combi[[x]],na.rm=TRUE)})
+
+## Keep only features that exceed a threshold (0.75) for skewness
+skewed_feats <- skewed_feats[abs(skewed_feats) > 0.75]
+
+## Transform skewed features with boxcox transformation
+for(x in names(skewed_feats)) {
+  bc=BoxCoxTrans(combi[[x]],lambda = .15)
+  combi[[x]]=predict(bc,combi[[x]])
+  #combi[[x]] <- log(combi[[x]] + 1)
+}
+```
+
+## Reconstruct all data with pre-processed data.
+
+```{r}
+combi <- cbind(combi[numeric_feats],categorical_1_hot)
+
+## Let us look at the dimensions of combi.
+dim(combi)
+```
+
+# Model building and evaluation
+
+## Splitting train dataset further into Training and Validation in order to evaluate the models
+
+```{r}
+training<-combi[1:1458,]
+testing<-combi[1459:2917,]
+set.seed(222)
+inTrain<-createDataPartition(y=training$SalePrice,p=.7,list=FALSE)
+Training<-training[inTrain,]
+Validation<-training[-inTrain,]
+```
+
+## Models
+
+## Lasso - Regularized Regression
+
+**Build model, predict SalePrice for Validation set and evaluate the RMSE score.**
+
+```{r}
+library(glmnet)
+library(Metrics)
+set.seed(123)
+cv_lasso=cv.glmnet(as.matrix(Training[,-59]),Training[,59])
+
+## Predictions
+preds<-predict(cv_lasso,newx=as.matrix(Validation[,-59]),s="lambda.min")
+rmse(Validation$SalePrice,preds)
+```
+## GBM
+
+**Build model, predict SalePrice for Validation set and evaluate the RMSE score.**
+
+```{r}
+library(iterators)
+library(parallel)
+library(doMC)
+set.seed(222)
+## detectCores() returns 16 cpus
+registerDoMC(16)
+## Set up caret model training parameters
+CARET.TRAIN.CTRL <-trainControl(method="repeatedcv",number=5,repeats=5,verboseIter=FALSE,allowParallel=TRUE)
+gbmFit<-train(SalePrice~.,method="gbm",metric="RMSE",maximize=FALSE,trControl=CARET.TRAIN.CTRL,tuneGrid=expand.grid(n.trees=(4:10)*50,interaction.depth=c(5),shrinkage=c(0.05),n.minobsinnode=c(10)),data=Training,verbose=FALSE)
+
+##print(gbmFit)
+
+## Predictions
+preds1 <- predict(gbmFit,newdata=Validation)
+rmse(Validation$SalePrice,preds1)
+```
+
+## XGBOOST
+
+**Build model, predict SalePrice for Validation set and evaluate the RMSE score.**
+
+```{r}
+library(xgboost)
+set.seed(123)
+## Model parameters trained using xgb.cv function
+xgbFit=xgboost(data=as.matrix(Training[,-59]),nfold=5,label=as.matrix(Training$SalePrice),nrounds=2200,verbose=FALSE,objective='reg:linear',eval_metric='rmse',nthread=8,eta=0.01,gamma=0.0468,max_depth=6,min_child_weight=1.7817,subsample=0.5213,colsample_bytree=0.4603)
+##print(xgbFit)
+
+## Predictions
+preds2 <- predict(xgbFit,newdata=as.matrix(Validation[,-59]))
+rmse(Validation$SalePrice,preds2)
+```
+## RMSE score for Simple Average of the three models
+
+```{r}
+rmse(Validation$SalePrice,(preds+preds1+preds2)/3)
+```
+
+## RMSE score for Weighted Average of the three models
+
+```{r}
+rmse(Validation$SalePrice,(0.6*preds+0.1*preds1+0.3*preds2))
+```
+
+**So, the wighted average of the models scores better than simple average. Let us retrain the models on the whole training dataset and submit the weighted average solution.** 
+
+## Retraining on whole training set and Final Submission
+
+## Models
+
+## Lasso - Regularized Regression
+
+```{r}
+set.seed(123)
+cv_lasso=cv.glmnet(as.matrix(training[,-59]),training[,59])
+
+## Predictions
+preds=data.frame(exp(predict(cv_lasso,newx=as.matrix(testing[,-59]),s="lambda.min"))-1)
+```
+## GBM
+
+```{r}
+set.seed(222)
+registerDoMC(16)
+gbmFit<-train(SalePrice~.,method="gbm",metric="RMSE",maximize=FALSE,trControl=CARET.TRAIN.CTRL,tuneGrid=expand.grid(n.trees=(2:10)*50,interaction.depth=c(3:5),shrinkage=c(0.05),n.minobsinnode=c(10)),data=training,verbose=FALSE)
+
+##print(gbmFit)
+
+## Predictions
+preds1 <- exp(predict(gbmFit,newdata=testing)) - 1
+```
+
+## XGBOOST
+
+```{r}
+## Model parameters tuned using xgb.cv function
+set.seed(123)
+xgbFit=xgboost(data=as.matrix(training[,-59]),nfold=5,label=as.matrix(training$SalePrice),nrounds=2200,verbose=FALSE,objective='reg:linear',eval_metric='rmse',nthread=8,eta=0.01,gamma=0.0468,max_depth=6,min_child_weight=1.7817,subsample=0.5213,colsample_bytree=0.4603)
+##print(xgbFit)
+
+## Predictions
+preds2 <- exp(predict(xgbFit,newdata=as.matrix(testing[,-59]))) - 1
+```
+
+## Weighted Average of Lasso + GBM + XGBOOST and Final Submission
+
+```{r}
+df <- data.frame(Id=test_ID,SalePrice=0.6*preds$X1+0.16*preds1+.24*preds2)
+write.csv(df,"submission.csv",row.names=FALSE)
+```
+
+This submission scores **0.12039 (Top 20%)** on the Leaderboard. 
+
+**Thank you, everyone! Comments and suggestions for improvement are welcome!** 
+
+**Please upvote if you found it useful. Thanks!**
