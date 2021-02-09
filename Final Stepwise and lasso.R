@@ -22,6 +22,9 @@ library(Metrics)
 if (!require(car)) install.packages('car') # Companion to Applied Regression
 library(car)
 
+if (!require(corrplot)) install.packages('corrplot') # Correlation Plots
+library(corrplot)
+
 ##############################################################################
 # Data Importation and Pre-processing
 ##############################################################################
@@ -40,6 +43,24 @@ test_id = test_set$Id
 # Place N/A into empty saleprice column in test set
 test_set$SalePrice = NA
 
+# Checking for most correlated variables
+Train<-train_set[-1]
+
+numericVars <- which(sapply(Train, is.numeric)) #index vector numeric variables
+cat('There are', length(numericVars), 'numeric variables')
+
+Train_numVar <- Train[, numericVars]
+cor_numVar <- cor(Train_numVar, use="pairwise.complete.obs") #correlations of all numeric variables
+
+#sort on decreasing correlations with SalePrice
+cor_sorted <- as.matrix(sort(cor_numVar[,'SalePrice'], decreasing = TRUE))
+#select only high corelations
+CorHigh <- names(which(apply(cor_sorted, 1, function(x) abs(x)>0.5)))
+cor_numVar <- cor_numVar[CorHigh, CorHigh]
+
+corrplot.mixed(cor_numVar, tl.col="black", tl.pos = "lt")
+
+# Most correlated numeric variable is GrLiveArea. Thus we will remove outliers to ensure it doesnt adversely impact correlation.
 # Check for outliers by plotting saleprice vs GrLivArea
 qplot(train_set$GrLivArea, 
       train_set$SalePrice,
@@ -271,10 +292,8 @@ plot(model_step, 2) #Normal QQ.... not normal pattern
 plot(model_step, 3) # heteroscedascity
 
 # E No autocorrelation of residuals - YES
-acf(model_step$residuals) #the very first line (to the left) shows the correlation of residual with itself (Lag0), therefore, it will always be equal to 1. Correlation values drop below the dashed blue line from lag1 itself. So autocorrelation canât be confirmed.
-# test for randomness, H0:is random, H1:is pattern
-lawstat::runs.test(model_step$residuals)
 # Durbin-Watson test, H0:no autocorrelation, H1: there is autocorrelation
+#The Durbin-Waston test now presents a D-W Statistic of 1.925 (close to 2.0) and a p-value of > 0.05, thus, we do not reject Ho: Residuals are not autocorrelated.
 durbinWatsonTest(model_step)
 
 # Predictions
