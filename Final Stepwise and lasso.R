@@ -235,6 +235,7 @@ validation_index <- createDataPartition(y, times = 1, p = 0.3, list = FALSE)
 validation <- train[validation_index,]
 training <- train[-validation_index,]
 
+
 # 1. Lasso Regression
 set.seed(76)
 model_lasso = cv.glmnet(as.matrix(training[, -59]), 
@@ -256,7 +257,7 @@ pred_lasso = data.frame(exp(predict(cv_lasso,
                                s = "lambda.min")) - 1)
 
 # Saving lasso prediction results
-df<-data.frame(Id=test_id, SalePrice=preds$X1)
+df<-data.frame(Id=test_id, SalePrice=pred_lasso$X1)
 write.csv(df, "results.csv", row.names = FALSE)
 
 
@@ -281,7 +282,7 @@ plot(model_step, 2) #Normal QQ.... not normal pattern
 plot(model_step, 3) # heteroscedascity
 
 # E No autocorrelation of residuals - YES
-acf(model_step$residuals) #the very first line (to the left) shows the correlation of residual with itself (Lag0), therefore, it will always be equal to 1. Correlation values drop below the dashed blue line from lag1 itself. So autocorrelation can’t be confirmed.
+acf(model_step$residuals) #the very first line (to the left) shows the correlation of residual with itself (Lag0), therefore, it will always be equal to 1. Correlation values drop below the dashed blue line from lag1 itself. So autocorrelation canât be confirmed.
 # test for randomness, H0:is random, H1:is pattern
 lawstat::runs.test(model_step$residuals)
 # Durbin-Watson test, H0:no autocorrelation, H1: there is autocorrelation
