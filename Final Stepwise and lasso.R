@@ -247,18 +247,7 @@ pred <- predict(model_lasso,
                 s = "lambda.min")
 rmse(validation$SalePrice, pred)
 
-# Retraining on whole training set and Final Submission
-set.seed(123)
-cv_lasso = cv.glmnet(as.matrix(training[, -59]), training[, 59])
 
-## Predictions
-pred_lasso = data.frame(exp(predict(cv_lasso, 
-                               newx = as.matrix(test[, -59]), 
-                               s = "lambda.min")) - 1)
-
-# Saving lasso prediction results
-df<-data.frame(Id=test_id, SalePrice=pred_lasso$X1)
-write.csv(df, "results.csv", row.names = FALSE)
 
 
 # 2. Stepwise Regression
@@ -292,4 +281,21 @@ durbinWatsonTest(model_step)
 pred_step <- predict(model_step, newdata = validation)
 rmse(validation$SalePrice, pred_step)
 
+##############################################################################
+#Results
+##############################################################################
 
+
+# Retraining on whole training set and final Submission
+set.seed(76)
+cv_lasso = cv.glmnet(as.matrix(training[, -59]), 
+                     training[, 59])
+
+## Predictions
+pred_lasso = data.frame(exp(predict(cv_lasso, 
+                                    newx = as.matrix(test[, -59]), 
+                                    s = "lambda.min")) - 1)
+
+# Saving lasso prediction results
+df<-data.frame(Id=test_id, SalePrice=pred_lasso$X1)
+write.csv(df, "results.csv", row.names = FALSE)
