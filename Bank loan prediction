@@ -4,7 +4,7 @@
 if (!require(tidyverse)) install.packages('tidyverse') # Data manipulation, exploration and visualization
 library(tidyverse)
 
-if (!require(caret)) install.packages('caret') # Data manipulation, exploration and visualization
+if (!require(caret)) install.packages('caret') # Classification and regression
 library(caret)
 
 if (!require(ROSE)) install.packages('ROSE')# Package for Binary Imbalance
