@@ -215,10 +215,10 @@ dim(full_set)
 train<- full_set[1:1458, ]
 test<- full_set[1459:2917, ]
 
-#Data Partitioning Train: 80%, Validation: 20%
+#Data Partitioning Train: 90%, Validation: 10%
 set.seed(76)
 y <- train$SalePrice
-validation_index <- createDataPartition(y, times = 1, p = 0.2, list = FALSE)
+validation_index <- createDataPartition(y, times = 1, p = 0.1, list = FALSE)
 validation <- train[validation_index,]
 training <- train[-validation_index,]
 
