@@ -22,6 +22,9 @@ library(Metrics)
 if (!require(car)) install.packages('car') # Companion to Applied Regression
 library(car)
 
+if (!require(corrplot)) install.packages('corrplot') # Correlation Plots
+library(corrplot)
+
 ##############################################################################
 # Data Importation and Pre-processing
 ##############################################################################
@@ -40,6 +43,24 @@ test_id = test_set$Id
 # Place N/A into empty saleprice column in test set
 test_set$SalePrice = NA
 
+# Checking for most correlated variables
+Train<-train_set[-1]
+
+numericVars <- which(sapply(Train, is.numeric)) #index vector numeric variables
+cat('There are', length(numericVars), 'numeric variables')
+
+Train_numVar <- Train[, numericVars]
+cor_numVar <- cor(Train_numVar, use="pairwise.complete.obs") #correlations of all numeric variables
+
+#sort on decreasing correlations with SalePrice
+cor_sorted <- as.matrix(sort(cor_numVar[,'SalePrice'], decreasing = TRUE))
+#select only high corelations
+CorHigh <- names(which(apply(cor_sorted, 1, function(x) abs(x)>0.5)))
+cor_numVar <- cor_numVar[CorHigh, CorHigh]
+
+corrplot.mixed(cor_numVar, tl.col="black", tl.pos = "lt")
+
+# Most correlated numeric variable is GrLiveArea. Thus we will remove outliers to ensure it doesnt adversely impact correlation.
 # Check for outliers by plotting saleprice vs GrLivArea
 qplot(train_set$GrLivArea, 
       train_set$SalePrice,
@@ -235,32 +256,32 @@ validation_index <- createDataPartition(y, times = 1, p = 0.3, list = FALSE)
 validation <- train[validation_index,]
 training <- train[-validation_index,]
 
+
 # 1. Lasso Regression
 set.seed(76)
-model_lasso = cv.glmnet(as.matrix(training[, -59]), 
-                     training[, 59])
+model_lasso = glmnet(as.matrix(training[, -59]), 
+                           training[, 59])
+
+
+# Plot lasso
+plot(model_lasso, xvar = 'lambda')
+
+# Plot fraction deviance explained 
+plot(model_lasso, xvar = 'dev')
+
+# cross validate lasso for better model performance
+set.seed(76)
+model_lasso_cv = cv.glmnet(as.matrix(training[, -59]), 
+                        training[, 59])
 
 # Prediction with the validation set
-pred <- predict(model_lasso, 
-                newx = as.matrix(validation[, -59]),
-                s = "lambda.min")
-rmse(validation$SalePrice, pred)
+pred_las <- predict(model_lasso_cv, 
+                newx = as.matrix(validation[, -59]))
 
-# Retraining on whole training set and Final Submission
-set.seed(123)
-cv_lasso = cv.glmnet(as.matrix(training[, -59]), training[, 59])
-
-## Predictions
-pred_lasso = data.frame(exp(predict(cv_lasso, 
-                               newx = as.matrix(test[, -59]), 
-                               s = "lambda.min")) - 1)
-
-# Saving lasso prediction results
-df<-data.frame(Id=test_id, SalePrice=pred_lasso$X1)
-write.csv(df, "results.csv", row.names = FALSE)
 
 
 # 2. Stepwise Regression
+set.seed(76)
 model_step <- step(lm(formula = SalePrice ~ .,
                       data = training), 
                    direction = "forward")
@@ -281,14 +302,47 @@ plot(model_step, 2) #Normal QQ.... not normal pattern
 plot(model_step, 3) # heteroscedascity
 
 # E No autocorrelation of residuals - YES
-acf(model_step$residuals) #the very first line (to the left) shows the correlation of residual with itself (Lag0), therefore, it will always be equal to 1. Correlation values drop below the dashed blue line from lag1 itself. So autocorrelation can't be confirmed.
-# test for randomness, H0:is random, H1:is pattern
-lawstat::runs.test(model_step$residuals)
 # Durbin-Watson test, H0:no autocorrelation, H1: there is autocorrelation
+#The Durbin-Waston test now presents a D-W Statistic of 1.925 (close to 2.0) and a p-value of > 0.05, thus, we do not reject Ho: Residuals are not autocorrelated.
 durbinWatsonTest(model_step)
 
 # Predictions
 pred_step <- predict(model_step, newdata = validation)
-rmse(validation$SalePrice, pred_step)
+
+##############################################################################
+# Results 
+##############################################################################
+
+#Produce and save cross validated rmse results in dataframe
+lasso_rmse<-rmse(validation$SalePrice, pred_las)
+step_rmse<-rmse(validation$SalePrice, pred_step)
+
+rmse_results <- data_frame(method = "Lasso Model",
+                           RMSE = lasso_rmse)
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Stepwise Model",  
+                                     RMSE = step_rmse ))
+
+
+rmse_results %>% knitr::kable()
+
+# Retraining on whole training set and final Submission
+set.seed(76)
+final_lasso = cv.glmnet(as.matrix(train[, -59]), 
+                     train[, 59])
+
+## Predictions
+pred_lasso = data.frame(exp(predict(final_lasso, 
+                                    newx = as.matrix(test[, -59]), 
+                                    s = "lambda.min")) - 1)
+
+# Saving lasso prediction results
+df<-data.frame(Id=test_id, SalePrice=pred_lasso$X1)
+write.csv(df, "results_lasso.csv", row.names = FALSE)
+
+
+
+
 
 
